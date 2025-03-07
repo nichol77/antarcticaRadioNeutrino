@@ -6,6 +6,8 @@
 
 import numpy as np
 from pyproj import Transformer
+import math
+#import scipy.spatial.transform.Rotation
 
 class AntGeom:
 
@@ -57,5 +59,74 @@ class AntGeom:
     def getDistToWais(self,lat,lon,alt):
         x,y,z=self.latlonaltToXYZ(lat,lon,alt)
         return np.sqrt( (x-self.waisX)**2 + (y-self.waisY)**2 + (z-self.waisZ)**2)
+
+    # get an array of rotation matrices from two arrays of vectors
+    def get_rot_matrices(self,A, B):
+        assert A.shape == B.shape
+        v = np.cross(A, B)
+        #print("v.shape",v.shape)
+        s = np.linalg.norm(v,axis=1)
+        #print("s.shape",s.shape)
+        c = np.dot(A, B[0])
+        #print("c.shape",c.shape)
+        vx = np.zeros( (s.shape[0],3,3))
+        #print("vx.shape",vx.shape)
+        vx[:,0,1]=-v[:,2]
+        vx[:,0,2]=v[:,1]
+        vx[:,1,0]=v[:,2]
+        vx[:,1,2]=-v[:,0]
+        vx[:,2,0]=-v[:,1]
+        vx[:,2,1]=v[:,0]
+        #vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]]) 
+        #vxdot=np.einsum('...j,...j',vx,vx)
+        
+        #print("vx.shape",vx.shape)
+        vxdot=np.einsum('ijl,ilk->ijk',vx,vx)
+        #print("vxdot.shape",vxdot.shape)
+        #r = np.eye(3) + vx + (np.dot(vx, vx) * (1-c)/(s**2))
+        r = np.eye(3) + vx + (np.einsum('ijk,i->ijk',vxdot,(1-c)/(s**2)))
+        return r
+
+    def getThetaPhiWaveWais(self,lat,lon,alt,heading):
+        #First up we get the balloon posiiton in cartesian coordinatres
+        x,y,z=self.latlonaltToXYZ(lat,lon,alt)
+        x2,y2,z2=self.latlonaltToXYZ(lat,lon,alt+100)
+    
+        #Next we determine the vector of local up at the baloon position
+        mag2=np.sqrt((x2-x)**2 + (y2-y)**2 + (z2-z)**2)
+        upx=(x2-x)/mag2
+        upy=(y2-y)/mag2
+        upz=(z2-z)/mag2
+        up=np.array([upx,upy,upz]).T
+        #print("up.shape",up.shape)
+    
+        #Now we get the vector in the direction of WAIS
+        waisDirx=self.waisX-x
+        waisDiry=self.waisY-y
+        waisDirz=self.waisZ-z
+        waisDir=np.array([waisDirx,waisDiry,waisDirz]).T
+        #print(waisDir.shape)
+        #Now we tile the zhat unit vector so we can do some awful matrix multiplication
+        B=np.tile([0,0,1],(up.shape[0],1))
+        #print("B.shape",B.shape)
+        #print("B[0]",B[0])
+    
+        #Then we get the array of rotation matrices from local up to [0,0,1]
+        rotArray=self.get_rot_matrices(up,B)
+    
+        #Now we apply the rotation to the direction to WAIS
+        waisDirPrime=np.einsum('ijk,ik->ij',rotArray,waisDir)
+        #waisDirPrime=np.array([r.dot(w) for r,w in zip(rotArray,waisDir)])
+        #print("waisDirPrime.shape",waisDirPrime.shape)
+    
+        #Last step is to determine theta and phi wave
+        r=np.linalg.norm(waisDirPrime,axis=1)
+        rxy=np.sqrt(waisDirPrime[:,0]**2 + waisDirPrime[:,1]**2)
+        theta=np.arccos(waisDirPrime[:,2]/r)
+        phi=np.sign(waisDirPrime[:,1])*np.arccos(waisDirPrime[:,0]/rxy)
+    
+        #The final step would be to add or subract the heading (after converting it from degrees to radians)
+        phi= (phi + np.deg2rad(heading) )  #Can't remember if we add or subtract
+        return theta,np.mod(phi,2*np.pi)
 
     
